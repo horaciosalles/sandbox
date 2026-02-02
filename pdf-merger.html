@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Offline PDF Merger (Drag, Drop, Reorder)</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 24px; background: #f7f7f7; }
+    #dropzone {
+      border: 2px dashed #888;
+      padding: 40px;
+      text-align: center;
+      margin-bottom: 20px;
+      border-radius: 10px;
+      background: #fff;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #dropzone.dragover { background: #e0eaff; }
+    #fileList { margin: 16px 0; min-height: 40px; }
+    .file-row {
+      background: #fff;
+      margin-bottom: 6px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      box-shadow: 0 1px 2px #0001;
+      cursor: grab;
+    }
+    .file-row span { flex: 1; }
+    .file-row button {
+      margin-left: 6px;
+      border: none;
+      background: #eee;
+      color: #333;
+      font-size: 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 4px 10px;
+      transition: background 0.2s;
+    }
+    .file-row button:hover { background: #d0e0ff; }
+    button#mergeBtn { padding: 12px 28px; font-size: 18px; border-radius: 6px; border: none; background: #1976d2; color: #fff; cursor: pointer; }
+    button#mergeBtn:disabled { background: #aaa; }
+    #footer { margin-top: 40px; color: #888; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h2>Offline PDF Merger (Drag, Drop, Reorder, Unlimited PDFs)</h2>
+  <div id="dropzone">Drop PDF files here or click to select</div>
+  <input type="file" id="filePicker" accept="application/pdf" multiple style="display:none;">
+  <div id="fileList"></div>
+  <button id="mergeBtn" disabled>Merge PDFs</button>
+  <div id="footer">Powered by <a href="https://pdf-lib.js.org/">PDF-LIB</a> and <a href="https://sortablejs.github.io/Sortable/">SortableJS</a> (runs 100% offline)</div>
+  <script src="pdf-lib.min.js"></script>
+  <script src="Sortable.min.js"></script>
+  <script>
+    // Prevent default drag-and-drop for the whole window
+    window.addEventListener('dragover', function(e) { e.preventDefault(); });
+    window.addEventListener('drop', function(e) { e.preventDefault(); });
+
+    const dropzone = document.getElementById('dropzone');
+    const picker = document.getElementById('filePicker');
+    const fileList = document.getElementById('fileList');
+    const mergeBtn = document.getElementById('mergeBtn');
+    let files = [];
+
+    dropzone.onclick = () => picker.click();
+    picker.onchange = e => addFiles(e.target.files);
+
+    dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add('dragover'); };
+    dropzone.ondragleave = () => dropzone.classList.remove('dragover');
+    dropzone.ondrop = e => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      addFiles(e.dataTransfer.files);
+    };
+
+    function addFiles(newFiles) {
+      for (const f of newFiles) {
+        // Only add PDFs, check extension (type may be blank)
+        if (
+          f.name &&
+          f.name.toLowerCase().endsWith('.pdf') &&
+          !files.some(existing => existing.name === f.name && existing.size === f.size)
+        ) {
+          files.push(f);
+        }
+      }
+      renderList();
+    }
+
+    function removeFile(idx) {
+      files.splice(idx, 1);
+      renderList();
+    }
+
+    function renderList() {
+      if (files.length === 0) {
+        fileList.innerHTML = "<i>No PDFs selected.</i>";
+        mergeBtn.disabled = true;
+        return;
+      }
+      fileList.innerHTML = files.map((f, i) => `
+        <div class="file-row" data-idx="${i}">
+          <span>${i+1}. ${f.name} (${(f.size/1024).toFixed(1)} KB)</span>
+          <button title="Remove" onclick="removeFile(${i})">✕</button>
+        </div>
+      `).join('');
+      mergeBtn.disabled = false;
+
+      // Enable drag-and-drop reordering with SortableJS
+      if (!fileList.sortableInstance) {
+        fileList.sortableInstance = Sortable.create(fileList, {
+          animation: 150,
+          onEnd: function (evt) {
+            if (evt.oldIndex !== evt.newIndex) {
+              const moved = files.splice(evt.oldIndex, 1)[0];
+              files.splice(evt.newIndex, 0, moved);
+              renderList(); // re-render to update numbering and remove buttons
+            }
+          }
+        });
+      }
+    }
+
+    // Expose for inline onclick
+    window.removeFile = removeFile;
+
+    mergeBtn.onclick = async () => {
+      mergeBtn.disabled = true;
+      mergeBtn.textContent = "Merging...";
+      try {
+        const { PDFDocument } = window.PDFLib;
+        const mergedPdf = await PDFDocument.create();
+        for (const f of files) {
+          const bytes = await f.arrayBuffer();
+          const srcPdf = await PDFDocument.load(bytes);
+          const copiedPages = await mergedPdf.copyPages(srcPdf, srcPdf.getPageIndices());
+          copiedPages.forEach(page => mergedPdf.addPage(page));
+        }
+        const mergedBytes = await mergedPdf.save();
+        const blob = new Blob([mergedBytes], { type: "application/pdf" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "merged.pdf";
+        link.click();
+      } catch (err) {
+        alert("Error merging PDFs: " + err);
+      }
+      mergeBtn.textContent = "Merge PDFs";
+      mergeBtn.disabled = false;
+    };
+
+    renderList();
+  </script>
+</body>
+</html>
